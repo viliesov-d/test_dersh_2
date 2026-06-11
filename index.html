@@ -125,6 +125,9 @@ label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;colo
 
 .hist-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--bdr)}
 .hist-row:last-child{border-bottom:none}
+.user-stat-row{display:grid;grid-template-columns:1.3fr repeat(3,auto);gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--bdr)}
+.user-stat-row:last-child{border-bottom:none}
+.muted{font-size:12px;color:var(--ink3)}
 
 .q-block{background:var(--surf);border:1px solid var(--bdr);border-radius:var(--r);padding:1rem 1.125rem;margin-bottom:.75rem;box-shadow:0 8px 22px rgba(29,45,68,.05)}
 .q-hdr{display:flex;align-items:center;gap:8px;cursor:pointer}
@@ -156,6 +159,7 @@ label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;colo
   .row{flex-direction:column;gap:1rem}
   .row .field{margin-bottom:0}
   .hist-row{align-items:flex-start;flex-direction:column}
+  .user-stat-row{grid-template-columns:1fr;gap:4px}
   .quiz-actions{justify-content:stretch}
   .quiz-actions .btn{flex:1}
   .share-link-row{flex-direction:column}
@@ -169,6 +173,7 @@ label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;colo
     <div class="logo-mark"><i class="ti ti-clipboard-check" aria-hidden="true"></i></div>
     <span class="logo-name">Тести</span>
     <div class="topbar-end">
+      <button class="btn btn-sm" id="account-btn" onclick="goAccount()"><i class="ti ti-user" aria-hidden="true"></i> Увійти</button>
       <button class="btn btn-sm" onclick="goAdmin()"><i class="ti ti-settings" aria-hidden="true"></i> Адмін</button>
     </div>
   </div>
@@ -228,6 +233,30 @@ label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;colo
   </div>
 </div>
 
+<div id="page-user-login" class="page">
+  <div class="login-center">
+    <div class="card">
+      <div class="lock-box"><i class="ti ti-user" aria-hidden="true"></i></div>
+      <div style="text-align:center;font-size:18px;font-weight:700;margin-bottom:1.5rem">Кабінет користувача</div>
+      <div id="user-auth-form">
+        <div class="field"><label>Email</label><input type="email" id="user-email" placeholder="name@example.com" autocomplete="username"></div>
+        <div class="field"><label>Пароль</label><input type="password" id="user-pwd" placeholder="Мінімум 6 символів" autocomplete="current-password" onkeydown="if(event.key==='Enter')userLogin()"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary btn-full" onclick="userLogin()">Увійти</button>
+          <button class="btn btn-full" onclick="userRegister()">Реєстрація</button>
+        </div>
+        <p id="user-login-err" style="color:var(--red);font-size:12px;margin-top:.625rem;display:none;text-align:center"></p>
+      </div>
+      <div id="user-auth-profile" style="display:none;text-align:center">
+        <div style="font-weight:700" id="user-profile-email"></div>
+        <div class="muted" style="margin:.25rem 0 1rem">Статистика зберігається у Firebase і доступна з іншого браузера після входу.</div>
+        <button class="btn btn-danger btn-full" onclick="userLogout()"><i class="ti ti-logout" aria-hidden="true"></i> Вийти</button>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:1rem"><button class="btn btn-sm" onclick="showHome()"><i class="ti ti-arrow-left" aria-hidden="true"></i> Назад</button></div>
+  </div>
+</div>
+
 <div id="page-admin-login" class="page">
   <div class="login-center">
     <div class="card">
@@ -262,6 +291,9 @@ label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;colo
   </div>
   <div class="section-title">Всі тести</div>
   <div id="admin-list"></div>
+  <div class="divider"></div>
+  <div class="section-title">Статистика користувачів</div>
+  <div class="card" style="padding:.25rem 1.375rem" id="admin-users"></div>
 </div>
 
 <div id="page-create" class="page">
@@ -300,19 +332,23 @@ const FIREBASE_CONFIG={
   appId:"1:565131828862:web:56201859647f0cbf92822f"
 };
 const FIREBASE_TESTS_COLLECTION='tests';
+const FIREBASE_USERS_COLLECTION='users';
 const FIREBASE_SDK_VERSION='12.7.0';
+const ADMIN_EMAIL='danavilesov3@gmail.com';
 let S=defaultState();
 let editId=null,quiz=null,tInterval=null,qCount=0;
-let FB={enabled:false,ready:false,error:null,db:null,auth:null,user:null,mods:null,unsub:null,localTests:[]};
+let FB={enabled:false,ready:false,error:null,db:null,auth:null,user:null,mods:null,unsub:null,userUnsub:null,usersUnsub:null,users:[],localTests:[]};
 
-function defaultState(){return{tests:[],results:[],pwd:'admin123',updatedAt:0};}
+function defaultState(){return{tests:[],results:[],stats:{},statSeq:0,pwd:'admin123',updatedAt:0};}
 
 function normalizeState(data){
   const base=defaultState();
   if(!data||typeof data!=='object')return base;
   return {
-    tests:Array.isArray(data.tests)?data.tests:[],
+    tests:Array.isArray(data.tests)?data.tests.map(normalizeTest):[],
     results:Array.isArray(data.results)?data.results:[],
+    stats:data.stats&&typeof data.stats==='object'?data.stats:{},
+    statSeq:Number(data.statSeq)||0,
     pwd:data.pwd||base.pwd,
     updatedAt:Number(data.updatedAt)||0
   };
@@ -401,7 +437,12 @@ function normalizeTest(test){
     time:parseInt(test.time)||0,
     count:Math.max(0,parseInt(test.count)||0),
     shuffle:!!test.shuffle,
-    questions:Array.isArray(test.questions)?test.questions:[]
+    questions:Array.isArray(test.questions)?test.questions.map(q=>({
+      id:q.id||uid(),
+      type:q.type||'single',
+      text:q.text||'',
+      options:Array.isArray(q.options)?q.options:[]
+    })):[]
   };
 }
 
@@ -420,7 +461,7 @@ async function initFirebase(){
     FB.db=firestoreMod.getFirestore(app);
     FB.auth=authMod.getAuth(app);
     FB.enabled=true;FB.ready=true;FB.error=null;
-    authMod.onAuthStateChanged(FB.auth,user=>{FB.user=user;renderAuthUi();renderSyncStatus();});
+    authMod.onAuthStateChanged(FB.auth,user=>handleAuthChange(user));
     listenFirebaseTests();
     renderAuthUi();
     renderSyncStatus();
@@ -447,10 +488,66 @@ function listenFirebaseTests(){
   });
 }
 
+async function handleAuthChange(user){
+  FB.user=user;
+  if(FB.userUnsub){FB.userUnsub();FB.userUnsub=null;}
+  if(FB.usersUnsub){FB.usersUnsub();FB.usersUnsub=null;FB.users=[];}
+  if(user){
+    await ensureUserDoc(user);
+    listenUserDoc(user.uid);
+    if(isAdminUser())listenAllUsers();
+  }
+  renderAuthUi();
+  renderSyncStatus();
+  renderDataViews();
+}
+
+function adminEmailConfigured(){
+  return ADMIN_EMAIL&&ADMIN_EMAIL.includes('@')&&!ADMIN_EMAIL.includes('PASTE_');
+}
+
+function isAdminUser(){
+  return !!(FB.user&&adminEmailConfigured()&&FB.user.email&&FB.user.email.toLowerCase()===ADMIN_EMAIL.toLowerCase());
+}
+
+async function ensureUserDoc(user){
+  if(!FB.enabled||!FB.db||!FB.mods||!user)return;
+  const {doc,setDoc,serverTimestamp}=FB.mods;
+  await setDoc(doc(FB.db,FIREBASE_USERS_COLLECTION,user.uid),{
+    email:user.email||'',
+    uid:user.uid,
+    lastSeenAt:serverTimestamp()
+  },{merge:true});
+}
+
+function listenUserDoc(uid){
+  const {doc,onSnapshot}=FB.mods;
+  FB.userUnsub=onSnapshot(doc(FB.db,FIREBASE_USERS_COLLECTION,uid),snap=>{
+    const data=snap.data();
+    if(!data)return;
+    if(data.stats&&typeof data.stats==='object')S.stats=data.stats;
+    if(Array.isArray(data.results))S.results=data.results;
+    S.statSeq=Number(data.statSeq)||S.statSeq||0;
+    save();
+    renderDataViews();
+  });
+}
+
+function listenAllUsers(){
+  const {collection,onSnapshot}=FB.mods;
+  FB.usersUnsub=onSnapshot(collection(FB.db,FIREBASE_USERS_COLLECTION),snap=>{
+    FB.users=snap.docs.map(d=>({id:d.id,...d.data()}));
+    renderAdminUsers();
+  },err=>{
+    const el=document.getElementById('admin-users');
+    if(el)el.innerHTML=`<div class="empty" style="padding:1rem;color:var(--red)">Не вдалося завантажити статистику: ${esc(err.message||err)}</div>`;
+  });
+}
+
 function renderDataViews(){
   const active=document.querySelector('.page.active')?.id||'';
   if(active==='page-home')renderHome();
-  if(active==='page-admin')renderAdminList();
+  if(active==='page-admin'){renderAdminList();renderAdminUsers();}
   renderSyncStatus();
 }
 
@@ -458,10 +555,26 @@ function renderAuthUi(){
   const useCloud=FB.enabled&&FB.auth;
   const emailField=document.getElementById('admin-email-field');
   const hint=document.getElementById('login-hint');
+  const accountBtn=document.getElementById('account-btn');
+  const userForm=document.getElementById('user-auth-form');
+  const userProfile=document.getElementById('user-auth-profile');
+  const userProfileEmail=document.getElementById('user-profile-email');
+  if(accountBtn){
+    accountBtn.innerHTML=FB.user
+      ? `<i class="ti ti-user-check" aria-hidden="true"></i> ${esc(FB.user.email||'Профіль')}`
+      : '<i class="ti ti-user" aria-hidden="true"></i> Увійти';
+  }
+  if(userForm&&userProfile){
+    userForm.style.display=FB.user?'none':'block';
+    userProfile.style.display=FB.user?'block':'none';
+  }
+  if(userProfileEmail)userProfileEmail.textContent=FB.user?.email||'';
   if(emailField)emailField.style.display=useCloud?'block':'none';
   if(hint){
     hint.innerHTML=useCloud
-      ? 'Хмарний режим: увійдіть email і паролем адміністратора Firebase.'
+      ? adminEmailConfigured()
+        ? `Хмарний режим: адмін-доступ має ${esc(ADMIN_EMAIL)}.`
+        : 'Вкажіть ADMIN_EMAIL у файлі, щоб відділити адміна від користувачів.'
       : 'Локальний режим: <code style="background:var(--surf2);padding:2px 6px;border-radius:5px">admin123</code>';
   }
 }
@@ -483,13 +596,13 @@ function renderSyncStatus(){
   }
   el.innerHTML=`<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap">
     <span class="chip chip-teal"><i class="ti ti-cloud-check" aria-hidden="true"></i> Firebase підключено</span>
-    <span style="font-size:12px;color:var(--ink3)">${FB.user?'Адмін увійшов':'Читання для користувачів активне. Для редагування увійдіть.'}</span>
+    <span style="font-size:12px;color:var(--ink3)">${isAdminUser()?'Адмін увійшов':FB.user?'Користувач увійшов':'Читання для користувачів активне. Для статистики увійдіть.'}</span>
   </div>`;
 }
 
 async function saveFirebaseTest(test){
   if(!FB.enabled)return false;
-  if(!FB.user){alert('Увійдіть як адміністратор Firebase, щоб зберігати зміни для всіх.');return false;}
+  if(!isAdminUser()){alert('Увійдіть саме під email адміністратора, щоб зберігати зміни для всіх.');return false;}
   const {doc,setDoc,serverTimestamp}=FB.mods;
   await setDoc(doc(FB.db,FIREBASE_TESTS_COLLECTION,test.id),{...normalizeTest(test),updatedAt:serverTimestamp()});
   return true;
@@ -497,7 +610,7 @@ async function saveFirebaseTest(test){
 
 async function deleteFirebaseTest(id){
   if(!FB.enabled)return false;
-  if(!FB.user){alert('Увійдіть як адміністратор Firebase, щоб видаляти тести для всіх.');return false;}
+  if(!isAdminUser()){alert('Увійдіть саме під email адміністратора, щоб видаляти тести для всіх.');return false;}
   const {doc,deleteDoc}=FB.mods;
   await deleteDoc(doc(FB.db,FIREBASE_TESTS_COLLECTION,id));
   return true;
@@ -506,7 +619,7 @@ async function deleteFirebaseTest(id){
 async function publishLocalTests(){
   if(!firebaseConfigured()){alert('Спочатку вставте firebaseConfig у файл.');return;}
   if(!FB.enabled){alert('Firebase ще не підключився. Перезавантажте сторінку або перевірте конфіг.');return;}
-  if(!FB.user){alert('Увійдіть як адміністратор Firebase.');return;}
+  if(!isAdminUser()){alert('Увійдіть саме під email адміністратора.');return;}
   const tests=(S.tests.length?S.tests:FB.localTests).map(normalizeTest);
   if(!tests.length){alert('Немає локальних тестів для публікації.');return;}
   try{
@@ -515,6 +628,70 @@ async function publishLocalTests(){
   }catch(e){
     alert('Не вдалося опублікувати тести: '+(e.message||e));
   }
+}
+
+async function saveUserProgress(){
+  if(!FB.enabled||!FB.user||!FB.db||!FB.mods)return;
+  const {doc,setDoc,serverTimestamp}=FB.mods;
+  const results=[...S.results].slice(-50);
+  const summary=buildUserSummary(results,S.stats);
+  try{
+    await setDoc(doc(FB.db,FIREBASE_USERS_COLLECTION,FB.user.uid),{
+      uid:FB.user.uid,
+      email:FB.user.email||'',
+      stats:S.stats||{},
+      statSeq:S.statSeq||0,
+      results,
+      summary,
+      lastSeenAt:serverTimestamp()
+    },{merge:true});
+  }catch(e){
+    console.warn('Не вдалося зберегти статистику користувача',e);
+  }
+}
+
+function buildUserSummary(results,stats){
+  const attempts=results.length;
+  const avg=attempts?Math.round(results.reduce((sum,r)=>sum+(r.total?Math.round(r.score/r.total*100):0),0)/attempts):0;
+  let weak=0,seen=0;
+  Object.values(stats||{}).forEach(testStats=>{
+    Object.values(testStats||{}).forEach(st=>{
+      seen+=(st.seen||0);
+      if((st.lastPoints||0)<1)weak++;
+    });
+  });
+  return {attempts,avg,seen,weak,lastResultAt:results.at(-1)?.date||0};
+}
+
+function renderAdminUsers(){
+  const el=document.getElementById('admin-users');
+  if(!el)return;
+  if(!FB.enabled){
+    el.innerHTML='<div class="empty" style="padding:1.5rem">Статистика користувачів доступна після підключення Firebase.</div>';
+    return;
+  }
+  if(!isAdminUser()){
+    el.innerHTML='<div class="empty" style="padding:1.5rem">Увійдіть під email адміністратора, щоб бачити статистику користувачів.</div>';
+    return;
+  }
+  const users=[...FB.users].sort((a,b)=>(b.summary?.lastResultAt||0)-(a.summary?.lastResultAt||0));
+  if(!users.length){
+    el.innerHTML='<div class="empty" style="padding:1.5rem">Користувачів ще немає.</div>';
+    return;
+  }
+  el.innerHTML=users.map(u=>{
+    const s=u.summary||buildUserSummary(u.results||[],u.stats||{});
+    const last=s.lastResultAt?new Date(s.lastResultAt).toLocaleString('uk-UA',{dateStyle:'short',timeStyle:'short'}):'ще немає';
+    return `<div class="user-stat-row">
+      <div>
+        <div style="font-weight:700">${esc(u.email||'Без email')}</div>
+        <div class="muted">Останній тест: ${last}</div>
+      </div>
+      <span class="chip chip-blue">${s.attempts||0} проходжень</span>
+      <span class="chip ${(s.avg||0)>=80?'chip-grn':(s.avg||0)>=50?'chip-amb':'chip-red'}">${s.avg||0}% середній</span>
+      <span class="chip chip-gray">${s.weak||0} слабких</span>
+    </div>`;
+  }).join('');
 }
 
 function encodeShareData(data){
@@ -620,7 +797,39 @@ function renderHome(){
   }
 }
 
-function goAdmin(){if(FB.enabled&&FB.user)showAdmin();else showPage('admin-login');}
+function goAccount(){if(!FB.enabled){alert('Firebase ще не підключений.');return;}renderAuthUi();showPage('user-login');}
+async function userRegister(){
+  const email=document.getElementById('user-email').value.trim();
+  const pwd=document.getElementById('user-pwd').value;
+  const e=document.getElementById('user-login-err');
+  try{
+    await FB.mods.createUserWithEmailAndPassword(FB.auth,email,pwd);
+    e.style.display='none';
+    showHome();
+  }catch(err){
+    e.textContent=err.message||'Не вдалося зареєструватися';
+    e.style.display='block';
+  }
+}
+async function userLogin(){
+  const email=document.getElementById('user-email').value.trim();
+  const pwd=document.getElementById('user-pwd').value;
+  const e=document.getElementById('user-login-err');
+  try{
+    await FB.mods.signInWithEmailAndPassword(FB.auth,email,pwd);
+    e.style.display='none';
+    showHome();
+  }catch(err){
+    e.textContent='Невірний email або пароль';
+    e.style.display='block';
+  }
+}
+async function userLogout(){
+  if(FB.auth)await FB.mods.signOut(FB.auth);
+  showHome();
+}
+
+function goAdmin(){if(FB.enabled&&isAdminUser())showAdmin();else showPage('admin-login');}
 
 async function adminLogin(){
   const p=document.getElementById('admin-pwd').value;
@@ -628,7 +837,14 @@ async function adminLogin(){
   if(FB.enabled&&FB.auth){
     const email=document.getElementById('admin-email').value.trim();
     try{
-      await FB.mods.signInWithEmailAndPassword(FB.auth,email,p);
+      const cred=await FB.mods.signInWithEmailAndPassword(FB.auth,email,p);
+      FB.user=cred.user;
+      if(!isAdminUser()){
+        await FB.mods.signOut(FB.auth);
+        e.textContent='Цей email не має адмін-доступу';
+        e.style.display='block';
+        return;
+      }
       e.style.display='none';document.getElementById('admin-pwd').value='';showAdmin();
     }catch(err){
       e.textContent='Невірний email або пароль адміністратора';
@@ -640,7 +856,7 @@ async function adminLogin(){
   else{e.textContent='Невірний пароль';e.style.display='block';}
 }
 
-function showAdmin(){renderAdminList();renderSyncStatus();showPage('admin');}
+function showAdmin(){renderAdminList();renderAdminUsers();renderSyncStatus();showPage('admin');}
 
 function renderAdminList(){
   const c=document.getElementById('admin-list');
@@ -688,11 +904,12 @@ function editTest(id){
 function addQ(ex){
   qCount++;
   const id='q'+qCount;
+  const qid=ex&&ex.id?ex.id:uid();
   const type=ex?ex.type:'single';
   const text=ex?ex.text:'';
   const opts=ex?ex.options:[{text:'',correct:true},{text:'',correct:false}];
   const d=document.createElement('div');
-  d.className='q-block';d.id='qb-'+id;
+  d.className='q-block';d.id='qb-'+id;d.dataset.qid=qid;
   d.innerHTML=`
     <div class="q-hdr" onclick="toggleQ('${id}')">
       <span class="q-num">${qCount}</span>
@@ -742,7 +959,7 @@ function collectQs(){
       const chk=row.querySelector('input[type=checkbox],input[type=radio]');
       if(inp&&inp.value.trim())opts.push({text:inp.value.trim(),correct:chk?chk.checked:false});
     });
-    if(opts.length)qs.push({id:uid(),type,text,options:opts});
+    if(opts.length)qs.push({id:c.dataset.qid||uid(),type,text,options:opts});
   });
   return qs;
 }
@@ -775,11 +992,13 @@ async function deleteTest(){
 }
 
 function startTest(id){
+  if(FB.enabled&&!FB.user){
+    alert('Увійдіть або зареєструйтесь, щоб проходити тест і зберігати статистику.');
+    goAccount();
+    return;
+  }
   const test=S.tests.find(t=>t.id===id);if(!test)return;
-  let qs=[...test.questions];
-  const limit=Math.max(0,parseInt(test.count)||0);
-  if(limit>0&&limit<qs.length)qs=shuffle(qs).slice(0,limit);
-  else if(test.shuffle)qs=shuffle(qs);
+  let qs=selectQuizQuestions(test);
   qs=qs.map(q=>({...q,options:shuffle(q.options).map(o=>({...o}))}));
   quiz={test,questions:qs,idx:0,answers:[],timeLeft:test.time>0?test.time*60:null,selected:[],confirmed:false};
   renderQ();showPage('quiz');startTimer();
@@ -876,9 +1095,12 @@ function finishTest(){
   const total=quiz.questions.length;
   const r={id:uid(),testId:quiz.test.id,testName:quiz.test.name,score,total,date:Date.now(),
     answers:quiz.answers.map(a=>({question:quiz.questions[a.questionIdx].text,selected:a.selected.map(s=>quiz.questions[a.questionIdx].options[s].text),correct:a.correct,points:a.points??(a.correct?1:0),correctOptions:quiz.questions[a.questionIdx].options.filter(o=>o.correct).map(o=>o.text)}))};
+  updateQuestionStats();
   S.results.push(r);
   if(S.results.length>50)S.results=S.results.slice(-50);
-  save();showResults(r);
+  save();
+  saveUserProgress();
+  showResults(r);
 }
 
 function showResults(r){
@@ -907,6 +1129,64 @@ function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2
 function esc(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):''}
 function fmtScore(n){const v=Math.round((Number(n)||0)*10)/10;return Number.isInteger(v)?String(v):String(v).replace('.',',');}
 function questionCountLabel(t){const count=Math.max(0,parseInt(t.count)||0);return count>0&&count<t.questions.length?`${count} з ${t.questions.length} питань`:`${t.questions.length} питань`;}
+function selectQuizQuestions(test){
+  const all=[...test.questions];
+  const limit=Math.max(0,parseInt(test.count)||0);
+  const target=limit>0?Math.min(limit,all.length):all.length;
+  if(!target)return [];
+  if(target>=all.length){
+    return test.shuffle?weightedOrder(test,all):all;
+  }
+  return weightedSample(test,all,target);
+}
+function weightedOrder(test,questions){
+  return weightedSample(test,questions,questions.length);
+}
+function weightedSample(test,questions,target){
+  const pool=questions.map(q=>({...q}));
+  const picked=[];
+  while(pool.length&&picked.length<target){
+    const weights=pool.map(q=>questionWeight(test.id,q.id));
+    const total=weights.reduce((sum,w)=>sum+w,0)||pool.length;
+    let r=Math.random()*total;
+    let idx=0;
+    for(;idx<pool.length;idx++){
+      r-=weights[idx]||1;
+      if(r<=0)break;
+    }
+    picked.push(pool.splice(Math.min(idx,pool.length-1),1)[0]);
+  }
+  return picked;
+}
+function questionWeight(testId,questionId){
+  const st=S.stats?.[testId]?.[questionId];
+  if(!st)return 4;
+  const seen=st.seen||0;
+  const wrongRate=seen?Math.min(1,(st.wrong||0)/seen):0;
+  const age=Math.max(0,(S.statSeq||0)-(st.lastSeen||0));
+  const recency=st.lastSeen?Math.max(.25,Math.min(2,age/8)):2;
+  const difficulty=1+(wrongRate*3);
+  const lastWrong=st.lastPoints<1?1.75:1;
+  const mastery=(wrongRate===0&&seen>=3)?0.65:1;
+  return Math.max(.15,recency*difficulty*lastWrong*mastery);
+}
+function updateQuestionStats(){
+  if(!quiz?.test?.id)return;
+  const testId=quiz.test.id;
+  if(!S.stats)S.stats={};
+  if(!S.stats[testId])S.stats[testId]={};
+  quiz.answers.forEach(a=>{
+    const q=quiz.questions[a.questionIdx];
+    if(!q?.id)return;
+    const st=S.stats[testId][q.id]||{seen:0,wrong:0,lastSeen:0,lastPoints:0};
+    const points=a.points??(a.correct?1:0);
+    st.seen=(st.seen||0)+1;
+    st.wrong=(st.wrong||0)+(1-points);
+    st.lastPoints=points;
+    st.lastSeen=++S.statSeq;
+    S.stats[testId][q.id]=st;
+  });
+}
 function scoreQuestion(q,selected){
   const correct=q.options.map((o,i)=>o.correct?i:-1).filter(i=>i>=0);
   if(q.type!=='multi'){
