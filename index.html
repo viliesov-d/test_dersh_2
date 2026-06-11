@@ -125,8 +125,12 @@ label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;colo
 
 .hist-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--bdr)}
 .hist-row:last-child{border-bottom:none}
-.user-stat-row{display:grid;grid-template-columns:1.3fr repeat(3,auto);gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--bdr)}
+.user-stat-row{padding:14px 0;border-bottom:1px solid var(--bdr)}
 .user-stat-row:last-child{border-bottom:none}
+.user-stat-head{display:grid;grid-template-columns:1.3fr repeat(3,auto);gap:12px;align-items:center}
+.user-attempts{margin-top:.75rem;padding:.75rem;background:var(--surf2);border:1px solid var(--bdr);border-radius:var(--rs)}
+.attempt-row{display:grid;grid-template-columns:1.3fr auto auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)}
+.attempt-row:last-child{border-bottom:none}
 .muted{font-size:12px;color:var(--ink3)}
 
 .q-block{background:var(--surf);border:1px solid var(--bdr);border-radius:var(--r);padding:1rem 1.125rem;margin-bottom:.75rem;box-shadow:0 8px 22px rgba(29,45,68,.05)}
@@ -159,7 +163,7 @@ label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;colo
   .row{flex-direction:column;gap:1rem}
   .row .field{margin-bottom:0}
   .hist-row{align-items:flex-start;flex-direction:column}
-  .user-stat-row{grid-template-columns:1fr;gap:4px}
+  .user-stat-head,.attempt-row{grid-template-columns:1fr;gap:4px}
   .quiz-actions{justify-content:stretch}
   .quiz-actions .btn{flex:1}
   .share-link-row{flex-direction:column}
@@ -202,6 +206,7 @@ label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;colo
     <div id="q-opts"></div>
     <div id="q-fb"></div>
     <div class="quiz-actions">
+      <button class="btn" id="btn-google" onclick="checkQuestionGoogle()"><i class="ti ti-brand-google" aria-hidden="true"></i> Перевірити в Google</button>
       <button class="btn btn-primary" id="btn-confirm" onclick="confirmAnswer()" style="display:none"><i class="ti ti-check" aria-hidden="true"></i> Підтвердити</button>
       <button class="btn btn-primary" id="btn-next" onclick="nextQuestion()" style="display:none">Далі <i class="ti ti-arrow-right" aria-hidden="true"></i></button>
     </div>
@@ -310,6 +315,13 @@ label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;colo
       <div class="field"><label>Кількість питань (0 = всі)</label><input type="number" id="t-count" value="0" min="0"></div>
       <div class="field"><label>Перемішати питання</label><select id="t-shuffle"><option value="0">Ні</option><option value="1">Так</option></select></div>
     </div>
+  </div>
+  <div class="card" style="margin-bottom:.75rem;padding:.9rem 1.1rem">
+    <div class="field" style="margin-bottom:0">
+      <label>Пошук питання</label>
+      <input type="search" id="q-search" placeholder="Введіть слово або фразу..." oninput="filterQuestions()">
+    </div>
+    <div class="muted" id="q-search-info" style="margin-top:.5rem"></div>
   </div>
   <div id="q-container"></div>
   <button class="btn" style="margin-bottom:1rem" onclick="addQ()"><i class="ti ti-plus" aria-hidden="true"></i> Додати питання</button>
@@ -682,16 +694,39 @@ function renderAdminUsers(){
   el.innerHTML=users.map(u=>{
     const s=u.summary||buildUserSummary(u.results||[],u.stats||{});
     const last=s.lastResultAt?new Date(s.lastResultAt).toLocaleString('uk-UA',{dateStyle:'short',timeStyle:'short'}):'ще немає';
+    const attempts=[...(u.results||[])].reverse().slice(0,5);
+    const attemptsHtml=attempts.length?attempts.map(r=>attemptRowHtml(r)).join(''):'<div class="empty" style="padding:1rem">Проходжень ще немає.</div>';
     return `<div class="user-stat-row">
-      <div>
-        <div style="font-weight:700">${esc(u.email||'Без email')}</div>
-        <div class="muted">Останній тест: ${last}</div>
+      <div class="user-stat-head">
+        <div>
+          <div style="font-weight:700">${esc(u.email||'Без email')}</div>
+          <div class="muted">Останній тест: ${last}</div>
+        </div>
+        <span class="chip chip-blue">${s.attempts||0} проходжень</span>
+        <span class="chip ${(s.avg||0)>=80?'chip-grn':(s.avg||0)>=50?'chip-amb':'chip-red'}">${s.avg||0}% середній</span>
+        <span class="chip chip-gray">${s.weak||0} слабких</span>
       </div>
-      <span class="chip chip-blue">${s.attempts||0} проходжень</span>
-      <span class="chip ${(s.avg||0)>=80?'chip-grn':(s.avg||0)>=50?'chip-amb':'chip-red'}">${s.avg||0}% середній</span>
-      <span class="chip chip-gray">${s.weak||0} слабких</span>
+      <div class="user-attempts">
+        <div class="muted" style="font-weight:700;text-transform:uppercase;margin-bottom:.25rem">Останні проходження</div>
+        ${attemptsHtml}
+      </div>
     </div>`;
   }).join('');
+}
+
+function attemptRowHtml(r){
+  const pct=r.total?Math.round((Number(r.score)||0)/r.total*100):0;
+  const cls=pct>=80?'chip-grn':pct>=50?'chip-amb':'chip-red';
+  const date=r.date?new Date(r.date).toLocaleString('uk-UA',{dateStyle:'short',timeStyle:'short'}):'без дати';
+  const scoreText=r.total?`${fmtScore(r.score)}/${r.total}`:fmtScore(r.score);
+  return `<div class="attempt-row">
+    <div>
+      <div style="font-weight:700;font-size:13px">${esc(r.testName||'Без назви тесту')}</div>
+      <div class="muted">${date}</div>
+    </div>
+    <span class="chip ${cls}">${scoreText}</span>
+    <span class="chip ${cls}">${pct}%</span>
+  </div>`;
 }
 
 function encodeShareData(data){
@@ -881,6 +916,7 @@ function showCreate(){
   document.getElementById('t-time').value=10;
   document.getElementById('t-count').value=0;
   document.getElementById('t-shuffle').value=0;
+  document.getElementById('q-search').value='';
   document.getElementById('q-container').innerHTML='';
   document.getElementById('create-title').textContent='Новий тест';
   document.getElementById('del-btn').style.display='none';
@@ -894,6 +930,7 @@ function editTest(id){
   document.getElementById('t-time').value=t.time;
   document.getElementById('t-count').value=t.count||0;
   document.getElementById('t-shuffle').value=t.shuffle?1:0;
+  document.getElementById('q-search').value='';
   document.getElementById('q-container').innerHTML='';
   document.getElementById('create-title').textContent='Редагування';
   document.getElementById('del-btn').style.display='inline-flex';
@@ -923,18 +960,19 @@ function addQ(ex){
       </div>
     </div>
     <div id="${id}-body" style="margin-top:.75rem">
-      <textarea id="${id}-txt" placeholder="Текст питання...">${esc(text)}</textarea>
+      <textarea id="${id}-txt" placeholder="Текст питання..." oninput="filterQuestions()">${esc(text)}</textarea>
       <div id="${id}-opts">${opts.map((o,i)=>ansRow(id,i,o.text,o.correct,type)).join('')}</div>
       <button class="btn btn-sm" style="margin-top:6px" onclick="addOpt('${id}')"><i class="ti ti-plus" aria-hidden="true"></i> Варіант</button>
     </div>`;
   document.getElementById('q-container').appendChild(d);
+  filterQuestions();
 }
 
 function ansRow(qid,i,txt,ok,type){
   const t=type==='multi'?'checkbox':'radio';
   return `<div class="ans-row" id="${qid}-opt-${i}">
     <input type="${t}" name="${qid}-c" id="${qid}-c-${i}" ${ok?'checked':''} onchange="if('${type}'==='single')unchk('${qid}',${i})">
-    <input type="text" placeholder="Варіант ${i+1}" value="${esc(txt)}" id="${qid}-t-${i}" style="flex:1">
+    <input type="text" placeholder="Варіант ${i+1}" value="${esc(txt)}" id="${qid}-t-${i}" style="flex:1" oninput="filterQuestions()">
     <button class="btn btn-sm btn-icon" style="padding:6px" onclick="removeOpt('${qid}',${i})"><i class="ti ti-x" aria-hidden="true"></i></button>
   </div>`;
 }
@@ -943,8 +981,26 @@ function unchk(qid,keep){document.getElementById(qid+'-opts').querySelectorAll('
 function changeType(qid){const type=document.getElementById(qid+'-type').value;document.getElementById(qid+'-opts').querySelectorAll('input[type=checkbox],input[type=radio]').forEach(inp=>{inp.type=type==='multi'?'checkbox':'radio';inp.name=qid+'-c';});}
 function addOpt(qid){const c=document.getElementById(qid+'-opts');const n=c.querySelectorAll('.ans-row').length;const type=document.getElementById(qid+'-type').value;const d=document.createElement('div');d.innerHTML=ansRow(qid,n,'',false,type);c.appendChild(d.firstChild);}
 function removeOpt(qid,i){const el=document.getElementById(qid+'-opt-'+i);if(el)el.remove();}
-function removeQ(id){const el=document.getElementById('qb-'+id);if(el)el.remove();}
+function removeQ(id){const el=document.getElementById('qb-'+id);if(el)el.remove();filterQuestions();}
 function toggleQ(id){const b=document.getElementById(id+'-body');b.style.display=b.style.display==='none'?'':'none';}
+
+function filterQuestions(){
+  const search=document.getElementById('q-search');
+  const info=document.getElementById('q-search-info');
+  const blocks=[...document.getElementById('q-container').querySelectorAll('.q-block')];
+  const words=(search?.value||'').toLowerCase().trim().split(/\s+/).filter(Boolean);
+  let shown=0;
+  blocks.forEach(block=>{
+    const text=[
+      block.querySelector('textarea')?.value||'',
+      ...[...block.querySelectorAll('.ans-row input[type=text]')].map(inp=>inp.value||'')
+    ].join(' ').toLowerCase();
+    const match=!words.length||words.every(w=>text.includes(w));
+    block.style.display=match?'':'none';
+    if(match)shown++;
+  });
+  if(info)info.textContent=words.length?`Знайдено: ${shown} з ${blocks.length}`:'';
+}
 
 function collectQs(){
   const qs=[];
@@ -1053,6 +1109,13 @@ function selOpt(i){
     document.querySelectorAll('.opt-btn').forEach((b,j)=>b.classList.toggle('sel',quiz.selected.includes(j)));
   }
   document.getElementById('btn-confirm').style.display=quiz.selected.length?'inline-flex':'none';
+}
+
+function checkQuestionGoogle(){
+  if(!quiz)return;
+  const q=quiz.questions[quiz.idx];
+  const query=[q.text,...q.options.map(o=>o.text)].filter(Boolean).join(' ');
+  window.open('https://www.google.com/search?q='+encodeURIComponent(query),'_blank','noopener');
 }
 
 function confirmAnswer(){
