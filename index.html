@@ -127,7 +127,7 @@ label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;colo
 .hist-row:last-child{border-bottom:none}
 .user-stat-row{padding:14px 0;border-bottom:1px solid var(--bdr)}
 .user-stat-row:last-child{border-bottom:none}
-.user-stat-head{display:grid;grid-template-columns:1.3fr repeat(3,auto);gap:12px;align-items:center}
+.user-stat-head{display:grid;grid-template-columns:1.3fr repeat(4,auto);gap:12px;align-items:center}
 .user-attempts{margin-top:.75rem;padding:.75rem;background:var(--surf2);border:1px solid var(--bdr);border-radius:var(--rs)}
 .attempt-row{display:grid;grid-template-columns:1.3fr auto auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr)}
 .attempt-row:last-child{border-bottom:none}
@@ -705,6 +705,7 @@ function renderAdminUsers(){
         <span class="chip chip-blue">${s.attempts||0} проходжень</span>
         <span class="chip ${(s.avg||0)>=80?'chip-grn':(s.avg||0)>=50?'chip-amb':'chip-red'}">${s.avg||0}% середній</span>
         <span class="chip chip-gray">${s.weak||0} слабких</span>
+        <button class="btn btn-danger btn-sm" onclick="resetUserStats('${escAttr(u.id)}','${escAttr(u.email||"користувача")}')"><i class="ti ti-eraser" aria-hidden="true"></i> Скинути</button>
       </div>
       <div class="user-attempts">
         <div class="muted" style="font-weight:700;text-transform:uppercase;margin-bottom:.25rem">Останні проходження</div>
@@ -727,6 +728,27 @@ function attemptRowHtml(r){
     <span class="chip ${cls}">${scoreText}</span>
     <span class="chip ${cls}">${pct}%</span>
   </div>`;
+}
+
+async function resetUserStats(userId,email){
+  if(!isAdminUser()){alert('Скидати статистику може тільки адміністратор.');return;}
+  if(!confirm(`Повністю скинути статистику для ${email}?`))return;
+  try{
+    const {doc,setDoc,serverTimestamp}=FB.mods;
+    const emptySummary=buildUserSummary([],{});
+    await setDoc(doc(FB.db,FIREBASE_USERS_COLLECTION,userId),{
+      results:[],
+      stats:{},
+      statSeq:0,
+      summary:emptySummary,
+      lastResetAt:serverTimestamp()
+    },{merge:true});
+    if(FB.user&&FB.user.uid===userId){
+      S.results=[];S.stats={};S.statSeq=0;save();renderDataViews();
+    }
+  }catch(e){
+    alert('Не вдалося скинути статистику: '+(e.message||e));
+  }
 }
 
 function encodeShareData(data){
@@ -1190,6 +1212,7 @@ function showResults(r){
 function retryTest(){startTest(quiz.test.id);}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
 function esc(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):''}
+function escAttr(s){return esc(s).replace(/'/g,'&#39;')}
 function fmtScore(n){const v=Math.round((Number(n)||0)*10)/10;return Number.isInteger(v)?String(v):String(v).replace('.',',');}
 function questionCountLabel(t){const count=Math.max(0,parseInt(t.count)||0);return count>0&&count<t.questions.length?`${count} з ${t.questions.length} питань`:`${t.questions.length} питань`;}
 function selectQuizQuestions(test){
